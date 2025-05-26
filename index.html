@@ -136,6 +136,7 @@
             nextAlienSpawnTime = millis() + random(ALIEN_SPAWN_INTERVAL_MIN, ALIEN_SPAWN_INTERVAL_MAX);
 
             if (bgMusic && bgMusic.isLoaded()) {
+		bgMusic.volume(0.5)
                 bgMusic.loop();
             }
         }
