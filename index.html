@@ -3,11 +3,702 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Solar Skies</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.0/p5.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.0/addons/p5.sound.min.js"></script>
+    <style>
+        body { margin: 0; display: flex; justify-content: center; align-items: center; height: 100vh; background-color: #111; }
+        canvas { border: 1px solid #fff; }
+    </style>
 </head>
 <body>
-Hi.
+    <script>
+        // Game Constants
+        const TILE_SIZE = 32;
+        const VIEWPORT_WIDTH_TILES = 17;
+        const VIEWPORT_HEIGHT_TILES = 17;
+        const WORLD_WIDTH_TILES = 1024;
+        const WORLD_HEIGHT_TILES = 1024;
 
-<a href="./games/pjgame.html">link</a>
+        const CANVAS_WIDTH = VIEWPORT_WIDTH_TILES * TILE_SIZE; // 544
+        const CANVAS_HEIGHT = VIEWPORT_HEIGHT_TILES * TILE_SIZE; // 544
 
+        // Tile Types
+        const TILE_FLAT_GROUND = 0;
+        const TILE_MOUNTAIN = 1;
+        const TILE_CRATER = 2;
+        const TILE_ORE_GROUND = 3;
+        const TILE_WATER = 4; // Example, not in prompt but good for variety
+
+        let tileColors;
+
+        // Player
+        let playerWorldX; // Player's center X position in world tile coordinates (float)
+        let playerWorldY; // Player's center Y position in world tile coordinates (float)
+        let playerFacingDirection = 'S'; // N, S, E, W
+        let playerSpeed = 2.5 / TILE_SIZE; // Tiles per second, converted to per-frame in update
+        let playerRunSpeedMultiplier = 2;
+        let playerIsRunning = false;
+
+        // Stats
+        let health = 100;
+        let maxHealth = 100;
+        let ammo = 50;
+        let maxAmmo = 50;
+        let civilizationScore = 0;
+        let stamina = 100;
+        let maxStamina = 100;
+        const STAMINA_DEPLETION_RATE = 10; // Per second when running
+        const STAMINA_REGEN_RATE = 5;    // Per second when not running
+        const LOW_STAMINA_THRESHOLD = 0.3; // 30% of maxStamina
+        const LOW_STAMINA_SPEED_MULTIPLIER = 0.6; // Move at 60% speed when stamina is low
+
+        // Game Time
+        let gameTimeDays = 1;
+        let gameTimeMonths = 1;
+        const MAX_GAME_MONTHS = 2; // Game ends after 2 months
+        const GAME_DAY_DURATION_REAL_MINUTES = 15;
+        const GAME_DAY_DURATION_MILLIS = GAME_DAY_DURATION_REAL_MINUTES * 60 * 1000;
+        let gameTimeMillisCounter = 0;
+
+        // Inventory
+        let inventory = {
+            ore: 0,
+            // other materials can be added here
+        };
+        let showInventory = false;
+
+        // World Map
+        let worldMap; // 2D array
+
+        // Game State
+        let gameOver = false;
+        let gameWon = false;
+
+        // Sound
+        let bgMusic;
+        let audioStarted = false;
+
+
+        // Alien Constants & Variables
+        let aliens = [];
+        const ALIEN_MAX_HEALTH = maxHealth / 2; // Half of player's max health
+        const ALIEN_SPEED = 1.0 / TILE_SIZE; // Tiles per second, adjust as needed
+        const ALIEN_SIZE = TILE_SIZE * 0.7;
+        const ALIEN_SPAWN_INTERVAL_MIN = 5000; // Minimum ms between spawns
+        const ALIEN_SPAWN_INTERVAL_MAX = 15000; // Maximum ms between spawns
+        let nextAlienSpawnTime = 0;
+        const MAX_ALIENS = 10;
+        const ALIEN_ATTACK_RANGE = TILE_SIZE * 0.8; // How close alien needs to be to attack
+        const ALIEN_ATTACK_DAMAGE = 10;
+        const ALIEN_ATTACK_COOLDOWN = 1500; // ms
+
+        // Projectile Constants & Variables
+        let projectiles = [];
+        const PROJECTILE_SPEED = 7.0 * TILE_SIZE; // Pixels per second
+        const PROJECTILE_SIZE = TILE_SIZE * 0.2;
+        const PROJECTILE_LIFESPAN = 2000; // ms
+        const PROJECTILE_DAMAGE = 25; // Damage to aliens
+
+        function preload() {
+            console.log("Attempting to preload sound: 'soundtrack.mp3'");
+            // Adding callbacks to see if loading succeeds or fails
+            bgMusic = loadSound('soundtrack.mp3', soundSuccessfullyLoaded, soundLoadFailed);
+        }
+
+        function soundSuccessfullyLoaded() {
+            console.log("Hooray! Sound 'soundtrack.mp3' loaded successfully!");
+        }
+
+        function soundLoadFailed(err) {
+            console.error("Bummer! Failed to load sound 'soundtrack.mp3'. Error:", err);
+            alert("Music file 'soundtrack.mp3' could not be loaded. Please check the console (F12) for more details and ensure the file is in the correct folder and named correctly.");
+        }
+
+        function setup() {
+            createCanvas(CANVAS_WIDTH, CANVAS_HEIGHT);
+            frameRate(60); // Target 60 FPS
+
+            tileColors = [
+                color(150, 120, 90), // FLAT_GROUND
+                color(100, 100, 100), // MOUNTAIN
+                color(80, 70, 60),    // CRATER
+                color(200, 180, 100), // ORE_GROUND
+                color(50, 100, 200)   // WATER
+            ];
+
+            // Initialize player position to the center of the world map
+            playerWorldX = WORLD_WIDTH_TILES / 2;
+            playerWorldY = WORLD_HEIGHT_TILES / 2;
+
+            generateWorldMap();
+            
+            nextAlienSpawnTime = millis() + random(ALIEN_SPAWN_INTERVAL_MIN, ALIEN_SPAWN_INTERVAL_MAX);
+
+            if (bgMusic && bgMusic.isLoaded()) {
+                bgMusic.loop();
+            }
+        }
+
+        function generateWorldMap() {
+            worldMap = Array(WORLD_HEIGHT_TILES).fill(null).map(() => Array(WORLD_WIDTH_TILES).fill(TILE_FLAT_GROUND));
+
+            // Simple random generation
+            for (let y = 0; y < WORLD_HEIGHT_TILES; y++) {
+                for (let x = 0; x < WORLD_WIDTH_TILES; x++) {
+                    let r = random(1);
+                    if (r < 0.05) {
+                        worldMap[y][x] = TILE_MOUNTAIN;
+                    } else if (r < 0.08) {
+                        worldMap[y][x] = TILE_CRATER;
+                    } else if (r < 0.12) {
+                        worldMap[y][x] = TILE_ORE_GROUND;
+                    } else if (r < 0.15 && dist(x,y, WORLD_WIDTH_TILES/2, WORLD_HEIGHT_TILES/2) > 100) { // Avoid water near start
+                        worldMap[y][x] = TILE_WATER;
+                    } else {
+                        worldMap[y][x] = TILE_FLAT_GROUND;
+                    }
+                }
+            }
+            // Ensure starting area is clear
+            let startArea = 5;
+            for (let y = floor(playerWorldY) - startArea; y <= floor(playerWorldY) + startArea; y++) {
+                for (let x = floor(playerWorldX) - startArea; x <= floor(playerWorldX) + startArea; x++) {
+                    if (x >= 0 && x < WORLD_WIDTH_TILES && y >= 0 && y < WORLD_HEIGHT_TILES) {
+                        worldMap[y][x] = TILE_FLAT_GROUND;
+                    }
+                }
+            }
+        }
+
+        function updateGameTime(deltaTimeMillis) {
+            if (gameOver) return;
+
+            gameTimeMillisCounter += deltaTimeMillis;
+            if (gameTimeMillisCounter >= GAME_DAY_DURATION_MILLIS) {
+                gameTimeMillisCounter -= GAME_DAY_DURATION_MILLIS;
+                gameTimeDays++;
+                if (gameTimeDays > 30) { // Assuming 30 days per month
+                    gameTimeDays = 1;
+                    gameTimeMonths++;
+                    if (gameTimeMonths > MAX_GAME_MONTHS) {
+                        gameOver = true;
+                        // Potentially a "time's up" message
+                    }
+                }
+            }
+            if (civilizationScore >= 100) {
+                winGame();
+            }
+            if (health <= 0 && !gameOver) {
+                gameOver = true; // Player died
+                // gameWon will be false, so it shows "Game Over"
+            }
+        }
+
+        function handleInput(deltaTimeSeconds) {
+            if (gameOver) return;
+
+            let baseFrameSpeed = playerSpeed * TILE_SIZE * deltaTimeSeconds;
+
+            if (stamina / maxStamina < LOW_STAMINA_THRESHOLD && !playerIsRunning) { // Slow down if stamina is low and not trying to run
+                baseFrameSpeed *= LOW_STAMINA_SPEED_MULTIPLIER;
+            }
+            let currentSpeed = baseFrameSpeed;
+            if (playerIsRunning && stamina > 0) {
+                currentSpeed *= playerRunSpeedMultiplier;
+                stamina -= STAMINA_DEPLETION_RATE * deltaTimeSeconds;
+                if (stamina < 0) stamina = 0;
+            } else {
+                if (stamina < maxStamina) {
+                    stamina += STAMINA_REGEN_RATE * deltaTimeSeconds;
+                    if (stamina > maxStamina) stamina = maxStamina;
+                }
+            }
+
+            let dx = 0;
+            let dy = 0;
+
+            if (keyIsDown(87)) { // W
+                dy = -1;
+                playerFacingDirection = 'N';
+            }
+            if (keyIsDown(83)) { // S
+                dy = 1;
+                playerFacingDirection = 'S';
+            }
+            if (keyIsDown(65)) { // A
+                dx = -1;
+                playerFacingDirection = 'W';
+            }
+            if (keyIsDown(68)) { // D
+                dx = 1;
+                playerFacingDirection = 'E';
+            }
+
+            if (dx !== 0 || dy !== 0) {
+                // Normalize diagonal movement if necessary, or allow faster diagonal
+                // For now, simple addition. If dx and dy are both non-zero, it's faster.
+                // To normalize:
+                // let len = sqrt(dx*dx + dy*dy);
+                // if (len > 0) { dx /= len; dy /= len; }
+
+                let nextPlayerWorldX = playerWorldX + dx * currentSpeed;
+                let nextPlayerWorldY = playerWorldY + dy * currentSpeed;
+
+                // Collision detection (simple: can't walk on mountains or water)
+                let targetTileX = floor(nextPlayerWorldX + dx * 0.4); // Check slightly ahead in direction of movement
+                let targetTileY = floor(nextPlayerWorldY + dy * 0.4);
+
+                if (targetTileX >= 0 && targetTileX < WORLD_WIDTH_TILES &&
+                    targetTileY >= 0 && targetTileY < WORLD_HEIGHT_TILES) {
+                    let tileType = worldMap[targetTileY][targetTileX];
+                    if (tileType !== TILE_MOUNTAIN && tileType !== TILE_WATER) {
+                        playerWorldX = nextPlayerWorldX;
+                        playerWorldY = nextPlayerWorldY;
+                    }
+                }
+
+                // Clamp player to world boundaries
+                playerWorldX = constrain(playerWorldX, 0, WORLD_WIDTH_TILES -1);
+                playerWorldY = constrain(playerWorldY, 0, WORLD_HEIGHT_TILES -1);
+            }
+        }
+
+        function keyPressed() {
+            if (gameOver) return;
+
+            if (!audioStarted) {
+                userStartAudio(); // Try to start/resume the AudioContext
+                audioStarted = true;
+            }
+
+            if (keyCode === 32) { // Space Bar
+                playerIsRunning = true;
+            } else if (key === 'e' || key === 'E') {
+                showInventory = !showInventory;
+            } else if (key === 'm' || key === 'M') {
+                mineResource();
+            } else if (key === 'k' || key === 'K') {
+                shootWeapon();
+            }
+        }
+
+        function keyReleased() {
+            if (keyCode === 32) { // Space Bar
+                playerIsRunning = false;
+            }
+        }
+
+        function mineResource() {
+            let playerTileX = floor(playerWorldX);
+            let playerTileY = floor(playerWorldY);
+            let targetX = playerTileX;
+            let targetY = playerTileY;
+
+            if (playerFacingDirection === 'N') targetY--;
+            else if (playerFacingDirection === 'S') targetY++;
+            else if (playerFacingDirection === 'W') targetX--;
+            else if (playerFacingDirection === 'E') targetX++;
+
+            if (targetX >= 0 && targetX < WORLD_WIDTH_TILES && targetY >= 0 && targetY < WORLD_HEIGHT_TILES) {
+                if (worldMap[targetY][targetX] === TILE_ORE_GROUND) {
+                    worldMap[targetY][targetX] = TILE_FLAT_GROUND; // Ore depleted
+                    inventory.ore++;
+                    civilizationScore += 5; // Example: mining ore increases civ score
+                    // console.log("Mined ore! Total ore: " + inventory.ore);
+                }
+            }
+        }
+
+        function shootWeapon() {
+            if (ammo > 0) {
+                createProjectile();
+                ammo--;                
+            } else {
+                // console.log("Out of ammo!");
+            }
+        }
+
+        function createProjectile() {
+            let p = {
+                x: playerWorldX * TILE_SIZE, // Start at player's pixel position
+                y: playerWorldY * TILE_SIZE,
+                vx: 0,
+                vy: 0,
+                size: PROJECTILE_SIZE,
+                life: PROJECTILE_LIFESPAN,
+                creationTime: millis()
+            };
+
+            if (playerFacingDirection === 'N') p.vy = -PROJECTILE_SPEED;
+            else if (playerFacingDirection === 'S') p.vy = PROJECTILE_SPEED;
+            else if (playerFacingDirection === 'W') p.vx = -PROJECTILE_SPEED;
+            else if (playerFacingDirection === 'E') p.vx = PROJECTILE_SPEED;
+
+            // Adjust projectile start slightly so it doesn't hit player immediately if moving
+            let offset = TILE_SIZE * 0.5;
+            if (p.vx > 0) p.x += offset; else if (p.vx < 0) p.x -= offset;
+            if (p.vy > 0) p.y += offset; else if (p.vy < 0) p.y -= offset;
+
+            projectiles.push(p);
+        }
+
+
+        function winGame() {
+            if (gameOver) return; // Don't trigger win if already game over for other reasons
+            gameOver = true;
+            gameWon = true;
+        }
+
+        function trySpawnAlien() {
+            if (millis() > nextAlienSpawnTime && aliens.length < MAX_ALIENS) {
+                let spawnEdge = floor(random(4)); // 0: top, 1: bottom, 2: left, 3: right
+                let spawnX, spawnY;
+
+                // Spawn just outside the viewport
+                let viewportRadiusX = (VIEWPORT_WIDTH_TILES / 2 + 2) * TILE_SIZE;
+                let viewportRadiusY = (VIEWPORT_HEIGHT_TILES / 2 + 2) * TILE_SIZE;
+
+                let playerPixelX = playerWorldX * TILE_SIZE;
+                let playerPixelY = playerWorldY * TILE_SIZE;
+
+                if (spawnEdge === 0) { // Top
+                    spawnX = playerPixelX + random(-viewportRadiusX, viewportRadiusX);
+                    spawnY = playerPixelY - viewportRadiusY;
+                } else if (spawnEdge === 1) { // Bottom
+                    spawnX = playerPixelX + random(-viewportRadiusX, viewportRadiusX);
+                    spawnY = playerPixelY + viewportRadiusY;
+                } else if (spawnEdge === 2) { // Left
+                    spawnX = playerPixelX - viewportRadiusX;
+                    spawnY = playerPixelY + random(-viewportRadiusY, viewportRadiusY);
+                } else { // Right
+                    spawnX = playerPixelX + viewportRadiusX;
+                    spawnY = playerPixelY + random(-viewportRadiusY, viewportRadiusY);
+                }
+
+                // Convert to world tile coordinates, ensure it's on a walkable tile
+                let spawnTileX = floor(spawnX / TILE_SIZE);
+                let spawnTileY = floor(spawnY / TILE_SIZE);
+
+                if (spawnTileX >= 0 && spawnTileX < WORLD_WIDTH_TILES &&
+                    spawnTileY >= 0 && spawnTileY < WORLD_HEIGHT_TILES &&
+                    worldMap[spawnTileY][spawnTileX] !== TILE_MOUNTAIN &&
+                    worldMap[spawnTileY][spawnTileX] !== TILE_WATER) {
+
+                    aliens.push({
+                        x: spawnX / TILE_SIZE, // Store as float tile coords
+                        y: spawnY / TILE_SIZE,
+                        health: ALIEN_MAX_HEALTH,
+                        size: ALIEN_SIZE,
+                        attackCooldownTimer: 0
+                    });
+                }
+                nextAlienSpawnTime = millis() + random(ALIEN_SPAWN_INTERVAL_MIN, ALIEN_SPAWN_INTERVAL_MAX);
+            }
+        }
+
+        function updateAliens(deltaTimeSeconds) {
+            for (let i = aliens.length - 1; i >= 0; i--) {
+                let alien = aliens[i];
+
+                // Move towards player
+                let dx = playerWorldX - alien.x;
+                let dy = playerWorldY - alien.y;
+                let distToPlayer = sqrt(dx * dx + dy * dy);
+
+                if (distToPlayer > 0) { // Avoid division by zero
+                    alien.x += (dx / distToPlayer) * ALIEN_SPEED * deltaTimeSeconds * TILE_SIZE;
+                    alien.y += (dy / distToPlayer) * ALIEN_SPEED * deltaTimeSeconds * TILE_SIZE;
+                }
+
+                // Attack player
+                if (alien.attackCooldownTimer > 0) {
+                    alien.attackCooldownTimer -= deltaTimeSeconds * 1000;
+                }
+                if (distToPlayer * TILE_SIZE < ALIEN_ATTACK_RANGE && alien.attackCooldownTimer <= 0) {
+                    health -= ALIEN_ATTACK_DAMAGE;
+                    if (health < 0) health = 0;
+                    alien.attackCooldownTimer = ALIEN_ATTACK_COOLDOWN;
+                    // console.log("Player hit by alien! Health: " + health);
+                }
+
+                if (alien.health <= 0) {
+                    aliens.splice(i, 1);
+                    civilizationScore += 10; // Reward for killing alien
+                }
+            }
+        }
+
+        function updateProjectiles(deltaTimeSeconds) {
+            for (let i = projectiles.length - 1; i >= 0; i--) {
+                let p = projectiles[i];
+                p.x += p.vx * deltaTimeSeconds;
+                p.y += p.vy * deltaTimeSeconds;
+                if (millis() - p.creationTime > p.life) {
+                    projectiles.splice(i, 1);
+                }
+            }
+        }
+
+        function draw() {
+            let deltaTimeMillis = deltaTime; // p5 provides this global
+            let deltaTimeSeconds = deltaTimeMillis / 1000.0;
+
+            // Updates
+            if (!gameOver) {
+                handleInput(deltaTimeSeconds);
+                updateGameTime(deltaTimeMillis);
+                trySpawnAlien();
+                updateAliens(deltaTimeSeconds);
+                updateProjectiles(deltaTimeSeconds);
+                handleCollisions();
+            }
+
+            // Drawing
+            background(0); // Black space background
+
+            // --- Draw Map ---
+            push();
+            // Translate to center the player on screen, then move map opposite to player's world pos
+            translate(CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2);
+            translate(-playerWorldX * TILE_SIZE, -playerWorldY * TILE_SIZE);
+
+            // Determine which tiles are visible
+            let startTileX = floor(playerWorldX - VIEWPORT_WIDTH_TILES / 2 - 1);
+            let endTileX = floor(playerWorldX + VIEWPORT_WIDTH_TILES / 2 + 1);
+            let startTileY = floor(playerWorldY - VIEWPORT_HEIGHT_TILES / 2 - 1);
+            let endTileY = floor(playerWorldY + VIEWPORT_HEIGHT_TILES / 2 + 1);
+
+            for (let y = startTileY; y <= endTileY; y++) {
+                for (let x = startTileX; x <= endTileX; x++) {
+                    if (x >= 0 && x < WORLD_WIDTH_TILES && y >= 0 && y < WORLD_HEIGHT_TILES) {
+                        fill(tileColors[worldMap[y][x]]);
+                        noStroke();
+                        rect(x * TILE_SIZE, y * TILE_SIZE, TILE_SIZE, TILE_SIZE);
+                    }
+                }
+            }
+            pop();
+
+            // --- Draw Player Icon (always at center) ---
+            drawPlayer();
+
+            drawAliensAndProjectiles(); // Call this after map, before UI
+
+
+            // --- Draw UI Overlays ---
+            drawUI();
+
+            if (gameOver) {
+                drawGameOverScreen();
+            }
+            if (showInventory) {
+                drawInventoryScreen();
+            }
+        }
+
+        function drawAliensAndProjectiles() {
+            push();
+            // Translate to center the player on screen, then move map opposite to player's world pos
+            // This ensures aliens and projectiles are drawn relative to the map
+            translate(CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2);
+            translate(-playerWorldX * TILE_SIZE, -playerWorldY * TILE_SIZE);
+
+            // Draw Aliens
+            fill(0, 150, 0, 200); // Greenish, semi-transparent
+            stroke(0, 100, 0);
+            strokeWeight(1);
+            for (let alien of aliens) {
+                ellipse(alien.x * TILE_SIZE, alien.y * TILE_SIZE, alien.size, alien.size);
+                // Simple health bar above alien
+                let alienHealthBarWidth = alien.size * 0.8;
+                let alienHealthBarHeight = 5;
+                fill(255,0,0);
+                rect(alien.x * TILE_SIZE - alienHealthBarWidth/2, alien.y * TILE_SIZE - alien.size/2 - 10, alienHealthBarWidth * (alien.health / ALIEN_MAX_HEALTH), alienHealthBarHeight);
+                fill(0, 150, 0, 200); // Reset fill for next alien
+            }
+
+            // Draw Projectiles
+            fill(255, 255, 0); // Yellow
+            noStroke();
+            for (let p of projectiles) {
+                ellipse(p.x, p.y, p.size, p.size);
+            }
+            pop();
+        }
+
+        function handleCollisions() {
+            // Projectile vs Alien
+            for (let i = projectiles.length - 1; i >= 0; i--) {
+                for (let j = aliens.length - 1; j >= 0; j--) {
+                    let p = projectiles[i];
+                    let a = aliens[j];
+                    if (dist(p.x, p.y, a.x * TILE_SIZE, a.y * TILE_SIZE) < (p.size / 2 + a.size / 2)) {
+                        a.health -= PROJECTILE_DAMAGE;
+                        projectiles.splice(i, 1); // Remove projectile
+                        break; // Projectile can only hit one alien
+                    }
+                }
+            }
+        }
+
+        function drawPlayer() {
+            push();
+            translate(CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2); // Player is always at the center
+
+            // Body (spacesuit)
+            fill(200, 200, 220); // Light grey-blue
+            stroke(50);
+            strokeWeight(1);
+            rectMode(CENTER);
+            rect(0, 0, TILE_SIZE * 0.6, TILE_SIZE * 0.8); // Body
+
+            // Backpack
+            fill(150, 150, 160);
+            rect(0, TILE_SIZE * 0.1, TILE_SIZE * 0.7, TILE_SIZE * 0.5); // Backpack slightly lower
+
+            // Helmet
+            fill(220, 230, 255); // Light blueish white for visor
+            ellipse(0, -TILE_SIZE * 0.25, TILE_SIZE * 0.5, TILE_SIZE * 0.5); // Helmet
+
+            // Facing direction indicator (simple triangle)
+            fill(255, 0, 0); // Red
+            noStroke();
+            beginShape();
+            let d = TILE_SIZE * 0.3;
+            if (playerFacingDirection === 'N') {
+                vertex(0, -d); vertex(-d/2, -d/2); vertex(d/2, -d/2);
+            } else if (playerFacingDirection === 'S') {
+                vertex(0, d); vertex(-d/2, d/2); vertex(d/2, d/2);
+            } else if (playerFacingDirection === 'W') {
+                vertex(-d, 0); vertex(-d/2, -d/2); vertex(-d/2, d/2);
+            } else if (playerFacingDirection === 'E') {
+                vertex(d, 0); vertex(d/2, -d/2); vertex(d/2, d/2);
+            }
+            endShape(CLOSE);
+
+            rectMode(CORNER); // Reset rect mode
+            pop();
+        }
+
+        function drawUI() {
+            push();
+            textSize(16);
+            textFont('Arial');
+            
+            // Civilization Rating (Top Left)
+            fill(255);
+            textAlign(LEFT, TOP);
+            text(`Civilization: ${civilizationScore}`, 10, 10);
+            text(`Time: Month ${gameTimeMonths}, Day ${gameTimeDays}`, 10, 30);
+
+            // Health Bar (Top Right)
+            let healthBarWidth = 150;
+            let healthBarHeight = 20;
+            let healthX = CANVAS_WIDTH - healthBarWidth - 10;
+            let healthY = 10;
+            fill(50);
+            rect(healthX, healthY, healthBarWidth, healthBarHeight);
+            fill(0, 200, 0);
+            let currentHealthWidth = map(health, 0, maxHealth, 0, healthBarWidth);
+            rect(healthX, healthY, currentHealthWidth, healthBarHeight);
+            fill(255);
+            textAlign(CENTER, CENTER);
+            text(`${health}/${maxHealth} HP`, healthX + healthBarWidth / 2, healthY + healthBarHeight / 2);
+
+            // Stamina Bar (Top Center)
+            let staminaBarWidth = 200;
+            let staminaBarHeight = 15;
+            let staminaX = (CANVAS_WIDTH - staminaBarWidth) / 2;
+            let staminaY = 10;
+            fill(50);
+            rect(staminaX, staminaY, staminaBarWidth, staminaBarHeight);
+            fill(255, 255, 0); // Yellow for stamina
+            let currentStaminaWidth = map(stamina, 0, maxStamina, 0, staminaBarWidth);
+            rect(staminaX, staminaY, currentStaminaWidth, staminaBarHeight);
+            fill(0);
+            textAlign(CENTER, CENTER);
+            text(`Stamina`, staminaX + staminaBarWidth / 2, staminaY + staminaBarHeight / 2);
+
+            // Ammo Bar (Bottom Right)
+            let ammoBarWidth = 100;
+            let ammoBarHeight = 20;
+            let ammoX = CANVAS_WIDTH - ammoBarWidth - 10;
+            let ammoY = CANVAS_HEIGHT - ammoBarHeight - 10;
+            fill(50);
+            rect(ammoX, ammoY, ammoBarWidth, ammoBarHeight);
+            fill(200, 100, 0); // Orange for ammo
+            let currentAmmoWidth = map(ammo, 0, maxAmmo, 0, ammoBarWidth);
+            rect(ammoX, ammoY, currentAmmoWidth, ammoBarHeight);
+            fill(255);
+            textAlign(CENTER, CENTER);
+            text(`${ammo}/${maxAmmo} Ammo`, ammoX + ammoBarWidth / 2, ammoY + ammoBarHeight / 2);
+
+            pop();
+        }
+
+        function drawInventoryScreen() {
+            push();
+            fill(0, 0, 0, 200); // Semi-transparent background
+            rect(CANVAS_WIDTH / 4, CANVAS_HEIGHT / 4, CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2);
+
+            fill(255);
+            textAlign(CENTER, TOP);
+            textSize(24);
+            text("Inventory", CANVAS_WIDTH / 2, CANVAS_HEIGHT / 4 + 20);
+
+            textSize(18);
+            textAlign(LEFT, TOP);
+            let invY = CANVAS_HEIGHT / 4 + 60;
+            text(`- Ore: ${inventory.ore}`, CANVAS_WIDTH / 4 + 30, invY);
+            // Add other inventory items here
+            // text(`- Wood: ${inventory.wood}`, CANVAS_WIDTH / 4 + 30, invY + 30);
+
+            textSize(14);
+            textAlign(CENTER, BOTTOM);
+            text("Press E to close", CANVAS_WIDTH / 2, CANVAS_HEIGHT * 0.75 - 10);
+            pop();
+        }
+
+        function drawGameOverScreen() {
+            push();
+            fill(0, 0, 0, 200); // Semi-transparent overlay
+            rect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+
+            fill(255);
+            textAlign(CENTER, CENTER);
+            textSize(48);
+            if (gameWon) {
+                text("Civilization Saved!", CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2 - 40);
+            } else if (gameTimeMonths > MAX_GAME_MONTHS) {
+                text("Time's Up!", CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2 - 40);
+            } else { // Could be other game over conditions like health <= 0
+                 text("Game Over", CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2 - 40);
+            }
+            
+            textSize(24);
+            text(`Final Civilization Score: ${civilizationScore}`, CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2 + 20);
+            textSize(18);
+            text("Refresh to play again.", CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2 + 60);
+            if (bgMusic && bgMusic.isPlaying()) {
+                bgMusic.stop();
+            }
+            pop();
+            noLoop(); // Stop the game loop
+        }
+
+        // Basic collision check for player movement (can be expanded)
+        // This is now integrated into handleInput
+        // function canMoveTo(worldTileX, worldTileY) {
+        //     if (worldTileX < 0 || worldTileX >= WORLD_WIDTH_TILES ||
+        //         worldTileY < 0 || worldTileY >= WORLD_HEIGHT_TILES) {
+        //         return false; // Out of bounds
+        //     }
+        //     const tileType = worldMap[worldTileY][worldTileX];
+        //     return tileType !== TILE_MOUNTAIN && tileType !== TILE_WATER; // Cannot move onto mountains or water
+        // }
+
+    </script>
 </body>
 </html>
