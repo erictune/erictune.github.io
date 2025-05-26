@@ -76,7 +76,9 @@
         let gameWon = false;
 
         // Sound
-        let bgMusic;
+        let bgMusic; 		// background sound object
+        let bgVolume = 0.5; 	// Current volume level for background music.
+        let bgGain;  		// background music volume (GainNode).
         let audioStarted = false;
 
 
@@ -136,8 +138,12 @@
             nextAlienSpawnTime = millis() + random(ALIEN_SPAWN_INTERVAL_MIN, ALIEN_SPAWN_INTERVAL_MAX);
 
             if (bgMusic && bgMusic.isLoaded()) {
-		bgMusic.volume(0.5)
-                bgMusic.loop();
+	        bgGain = new p5.Gain();
+                bgGain.connect();
+ 		bgMusic.disconnect();
+		bgGain.setInput(bgMusic);
+		bgGain.amp(bgVolume);
+		bgMusic.loop();
             }
         }
 
@@ -282,6 +288,10 @@
                 mineResource();
             } else if (key === 'k' || key === 'K') {
                 shootWeapon();
+            } else if (key === 'v') {
+                bgVolumeDown();
+            } else if (key === 'V') {
+                bgVolumeUp();
             }
         }
 
@@ -311,6 +321,22 @@
                 }
             }
         }
+
+	function bgVolumeUp() {
+		if (bgVolume + 0.1 <= 1.0) { 
+			bgVolume = bgVolume + 0.1;
+		}
+		console.log(`Setting volume to ${bgVolume}`);
+		bgGain.amp(bgVolume);
+	}
+
+	function bgVolumeDown() {
+		if (bgVolume - 0.1 >= 0.0) { 
+			bgVolume = bgVolume - 0.1;
+		}
+		console.log(`Setting volume to ${bgVolume}`);
+		bgGain.amp(bgVolume);
+	}
 
         function shootWeapon() {
             if (ammo > 0) {
